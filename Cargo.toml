@@ -1,5 +1,5 @@
 [package]
-name = "test-bounded-async-worker-pool"
+name = "bounded-async-worker-pool"
 version = "0.1.0"
 edition = "2024"
 

@@ -44,4 +44,48 @@ impl WorkerPool {
             workers: Mutex::new(workers),
         }
     }
+
+    /// Submits a job to the worker pool for execution.
+    /// # `job` - The job to be executed, which is a boxed future.
+    /// # Returns - A Result indicating whether the job was successfully submitted or if the pool is
+    pub async fn submit<F>(&self, job: F) -> Result<(), &'static str>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        // Lock the sender to ensure thread-safe access
+        let sender_guard = self.sender.lock().await;
+
+        if let Some(tx) = sender_guard.as_ref() {
+            // Box and Pin the job to fit the Job type
+            let boxed_job: Job = Box::pin(job);
+
+            //Send the job to the channel, returning an error if the channel is full
+            // Suspend this if channel is full, applying backpressure to the submitter
+            if tx.send(boxed_job).await.is_err() {
+                return Err("Failed to submit job: Worker pool has been shut down");
+            }
+            Ok(())
+        } else {
+            Err("Cannot submit job: Worker pool has been shut down")
+        }
+    }
+
+    /// Shuts down the worker pool gracefully, waiting for all workers to finish their current jobs.
+    /// After calling this method, no new jobs can be submitted to the pool.
+    pub async fn shutdown(&self) {
+        // Drop the sender
+        {
+            let mut sender_guard = self.sender.lock().await;
+            // Take the sender out of the Option, effectively dropping it and closing the channel
+            let _ = sender_guard.take();
+        }
+        // 2 Join all worker handles
+        let mut workers_guard = self.workers.lock().await;
+        let mut handles = Vec::new();
+        std::mem::swap(&mut *workers_guard, &mut handles);
+        for handle in handles {
+            // Await each worker to ensure they finish processing current jobs
+            let _ = handle.await;
+        }
+    }
 }

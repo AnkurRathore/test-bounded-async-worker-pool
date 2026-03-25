@@ -21,6 +21,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "843867be96c8daad0d758b57df9392b6d8d271134fce549de6ce169ff98a92af"
 
 [[package]]
+name = "bounded-async-worker-pool"
+version = "0.1.0"
+dependencies = [
+ "async-channel",
+ "tokio",
+]
+
+[[package]]
 name = "bytes"
 version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -213,14 +221,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
-]
-
-[[package]]
-name = "test-bounded-async-worker-pool"
-version = "0.1.0"
-dependencies = [
- "async-channel",
- "tokio",
 ]
 
 [[package]]
