@@ -1,5 +1,4 @@
 use async_channel::{Sender, bounded};
-use core::num;
 use std::future::Future;
 use std::pin::Pin;
 use tokio::sync::Mutex;
@@ -87,5 +86,72 @@ impl WorkerPool {
             // Await each worker to ensure they finish processing current jobs
             let _ = handle.await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::time::{Duration, sleep};
+
+    #[tokio::test]
+    async fn test_jobs_execute_successfully() {
+        let pool = WorkerPool::new(2, 5);
+        let counter = Arc::new(AtomicUsize::new(0));
+
+        // Submit 10 jobs that increment the counter
+        for _ in 0..10 {
+            let c = Arc::clone(&counter);
+            pool.submit(async move {
+                c.fetch_add(1, Ordering::SeqCst);
+            })
+            .await
+            .unwrap();
+        }
+        pool.shutdown().await;
+        // Assert that all jobs were executed
+        assert_eq!(counter.load(Ordering::SeqCst), 10);
+    }
+
+    #[tokio::test]
+    async fn test_graceful_shutdown_waits_for_jobs() {
+        let pool = WorkerPool::new(2, 10);
+        let counter = Arc::new(AtomicUsize::new(0));
+
+        // Submit 5 jobs that take some time to complete
+        for _ in 0..5 {
+            let c = Arc::clone(&counter);
+            pool.submit(async move {
+                sleep(Duration::from_millis(100)).await; // Simulate work
+                c.fetch_add(1, Ordering::SeqCst);
+            })
+            .await
+            .unwrap();
+        }
+        // Shutdown the pool while jobs are still running
+        pool.shutdown().await;
+        // Assert that all jobs were executed before shutdown completed
+        assert_eq!(counter.load(Ordering::SeqCst), 5);
+    }
+
+    #[tokio::test]
+    async fn test_submit_after_shutdown_fails() {
+        let pool = WorkerPool::new(2, 5);
+        pool.shutdown().await;
+
+        // Attempt to submit a job after shutdown
+        let result = pool
+            .submit(async {
+                println!("This job should not be executed");
+            })
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(
+            result.err().unwrap(),
+            "Cannot submit job: Worker pool has been shut down"
+        );
     }
 }

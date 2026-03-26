@@ -8,7 +8,7 @@ async fn main() {
     let pool = WorkerPool::new(2, 3);
 
     // Spawn a background task to submit jobs
-    let pool_clone = &pool; // We can't clone the pool directly without Arc, but we can pass references in scopes
+    let _pool_clone = &pool; // We can't clone the pool directly without Arc, but we can pass references in scopes
 
     // Let's submit 6 jobs
     for i in 1..=6 {
