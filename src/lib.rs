@@ -3,6 +3,8 @@ use std::future::Future;
 use std::pin::Pin;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
+use std::sync::atomic::{AtomicUsize,Ordering};
+use std::sync::Arc;
 
 /// A Job is boxed, pinned future that can be sent across threads.
 pub type Job = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
@@ -14,7 +16,20 @@ pub struct WorkerPool {
     sender: Mutex<Option<Sender<Job>>>,
     /// A vector of JoinHandles for the worker tasks.
     workers: Mutex<Vec<JoinHandle<()>>>,
+    // Counters for monitoring the number of jobs in different states
+    queued_count: Arc<AtomicUsize>,
+    active_count: Arc<AtomicUsize>,
+    completed_count: Arc<AtomicUsize>,
 }
+
+#[derive(Debug,Clone)]
+pub struct PoolStats{
+    pub queued: usize,
+    pub active: usize,
+    pub completed: usize,
+}
+
+
 
 impl WorkerPool {
     /// Creates a new WorkerPool with the specified number of workers and job queue capacity
@@ -26,14 +41,26 @@ impl WorkerPool {
 
         let mut workers = Vec::with_capacity(num_workers);
 
+        let queued_count = Arc::new(AtomicUsize::new(0));
+        let active_count = Arc::new(AtomicUsize::new(0));
+        let completed_count = Arc::new(AtomicUsize::new(0));
+
         // Spawn worker tasks
         for _ in 0..num_workers {
             let rx_clone = receiver.clone();
+            let a_count = Arc::clone(&active_count);
+            let c_count = Arc::clone(&completed_count);
+            let q_count = Arc::clone(&queued_count);
 
             let handle = tokio::spawn(async move {
                 // The worker sits in this loop, waiting for jobs to execute
                 while let Ok(job) = rx_clone.recv().await {
+                    // Update counters
+                    q_count.fetch_sub(1, Ordering::SeqCst); // Job is no longer queued
+                    a_count.fetch_add(1, Ordering::SeqCst); // Job is now active
                     job.await;
+                    a_count.fetch_sub(1, Ordering::SeqCst); // Job is no longer active
+                    c_count.fetch_add(1, Ordering::SeqCst); // Job is completed
                 }
             });
             workers.push(handle);
@@ -41,6 +68,9 @@ impl WorkerPool {
         Self {
             sender: Mutex::new(Some(sender)),
             workers: Mutex::new(workers),
+            queued_count,
+            active_count,
+            completed_count,
         }
     }
 
@@ -63,6 +93,7 @@ impl WorkerPool {
             if tx.send(boxed_job).await.is_err() {
                 return Err("Failed to submit job: Worker pool has been shut down");
             }
+            self.queued_count.fetch_add(1, Ordering::SeqCst);
             Ok(())
         } else {
             Err("Cannot submit job: Worker pool has been shut down")
@@ -87,6 +118,16 @@ impl WorkerPool {
             let _ = handle.await;
         }
     }
+
+    // Return current stats of the pool
+    pub fn stats(&self) -> PoolStats {
+        PoolStats{
+            queued: self.queued_count.load(Ordering::SeqCst),
+            active: self.active_count.load(Ordering::SeqCst),
+            completed: self.completed_count.load(Ordering::SeqCst),
+        }
+    }
+    
 }
 
 #[cfg(test)]
