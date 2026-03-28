@@ -1,4 +1,5 @@
-use async_channel::{Sender, bounded};
+use async_channel::{Sender, bounded, Receiver};
+
 use std::future::Future;
 use std::pin::Pin;
 use tokio::sync::Mutex;
@@ -16,6 +17,7 @@ pub struct WorkerPool {
     sender: Mutex<Option<Sender<Job>>>,
     /// A vector of JoinHandles for the worker tasks.
     workers: Mutex<Vec<JoinHandle<()>>>,
+    receiver: Receiver<Job>,
     // Counters for monitoring the number of jobs in different states
     queued_count: Arc<AtomicUsize>,
     active_count: Arc<AtomicUsize>,
@@ -68,6 +70,7 @@ impl WorkerPool {
         Self {
             sender: Mutex::new(Some(sender)),
             workers: Mutex::new(workers),
+            receiver: receiver,
             queued_count,
             active_count,
             completed_count,
@@ -127,7 +130,29 @@ impl WorkerPool {
             completed: self.completed_count.load(Ordering::SeqCst),
         }
     }
-    
+
+    // Dybnamically add more workers to the pool
+    pub async fn add_workers(&self, num_workers: usize) {
+        let mut workers_guard = self.workers.lock().await;
+        
+        for _ in 0..num_workers {
+            let rx_clone = self.receiver.clone();
+            let a_count = Arc::clone(&self.active_count);
+            let c_count = Arc::clone(&self.completed_count);
+            let q_count = Arc::clone(&self.queued_count);
+
+            let handle = tokio::spawn(async move {
+                while let Ok(job) = rx_clone.recv().await {
+                    q_count.fetch_sub(1, Ordering::SeqCst);
+                    a_count.fetch_add(1, Ordering::SeqCst);
+                    job.await;
+                    a_count.fetch_sub(1, Ordering::SeqCst);
+                    c_count.fetch_add(1, Ordering::SeqCst);
+                }
+            });
+            workers_guard.push(handle);
+        }
+    }
 }
 
 #[cfg(test)]
