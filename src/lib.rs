@@ -1,11 +1,11 @@
-use async_channel::{Sender, bounded, Receiver};
+use async_channel::{Receiver, Sender, bounded};
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
-use std::sync::atomic::{AtomicUsize,Ordering};
-use std::sync::Arc;
 
 /// A Job is boxed, pinned future that can be sent across threads.
 pub type Job = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
@@ -24,14 +24,12 @@ pub struct WorkerPool {
     completed_count: Arc<AtomicUsize>,
 }
 
-#[derive(Debug,Clone)]
-pub struct PoolStats{
+#[derive(Debug, Clone)]
+pub struct PoolStats {
     pub queued: usize,
     pub active: usize,
     pub completed: usize,
 }
-
-
 
 impl WorkerPool {
     /// Creates a new WorkerPool with the specified number of workers and job queue capacity
@@ -39,7 +37,7 @@ impl WorkerPool {
     /// # `queue_capacity` - The maximum number of jobs that can be queued at once
     pub fn new(num_workers: usize, queue_capacity: usize) -> Self {
         //Create a bounded channel for job queueing
-        let (sender, receiver) = bounded::<Job>(queue_capacity);
+        let (sender, rx) = bounded::<Job>(queue_capacity);
 
         let mut workers = Vec::with_capacity(num_workers);
 
@@ -49,7 +47,7 @@ impl WorkerPool {
 
         // Spawn worker tasks
         for _ in 0..num_workers {
-            let rx_clone = receiver.clone();
+            let rx_clone = rx.clone();
             let a_count = Arc::clone(&active_count);
             let c_count = Arc::clone(&completed_count);
             let q_count = Arc::clone(&queued_count);
@@ -70,7 +68,7 @@ impl WorkerPool {
         Self {
             sender: Mutex::new(Some(sender)),
             workers: Mutex::new(workers),
-            receiver: receiver,
+            receiver: rx,
             queued_count,
             active_count,
             completed_count,
@@ -124,7 +122,7 @@ impl WorkerPool {
 
     // Return current stats of the pool
     pub fn stats(&self) -> PoolStats {
-        PoolStats{
+        PoolStats {
             queued: self.queued_count.load(Ordering::SeqCst),
             active: self.active_count.load(Ordering::SeqCst),
             completed: self.completed_count.load(Ordering::SeqCst),
@@ -134,7 +132,7 @@ impl WorkerPool {
     // Dybnamically add more workers to the pool
     pub async fn add_workers(&self, num_workers: usize) {
         let mut workers_guard = self.workers.lock().await;
-        
+
         for _ in 0..num_workers {
             let rx_clone = self.receiver.clone();
             let a_count = Arc::clone(&self.active_count);
